@@ -76,7 +76,8 @@ jobs:
           "$tools/objdump" -f "$dll" | grep -q "file format ${{ matrix.pe }}"
           imports=$(grep 'DLL Name:' "$OUT/objdump-p.txt" | awk '{print $3}' | sort | tr '\n' ' ')
           echo "imports: $imports"
-          test "$imports" = "ADVAPI32.dll KERNEL32.dll onnxruntime.dll "
+          # Static CRT: only system DLLs upstream's DLL also imports, plus ONNX Runtime.
+          test "$imports" = "KERNEL32.dll onnxruntime.dll " || test "$imports" = "ADVAPI32.dll KERNEL32.dll onnxruntime.dll "
           grep -aq '1.13.7+cassini-parakeet-v3-reference-v1.nemotron-diarization-v2.parakeet-ultra-v1' "$dll"
           # ONNX Runtime stays upstream's; report whether the pinned archive matches it.
           if cmp "$OUT/onnxruntime.dll" lib/${{ matrix.triple }}/onnxruntime.dll; then
