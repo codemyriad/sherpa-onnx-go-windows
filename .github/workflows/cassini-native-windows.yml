@@ -1,0 +1,128 @@
+# Build the Cassini Windows C API DLL with MSVC (static CRT, as upstream) for
+# each architecture upstream ships, from the pinned source via
+# scripts/build-native.sh, check its imports, then probe it through the stock
+# Go wrapper (MinGW cgo, as Go uses) on the runner. ONNX Runtime stays upstream's.
+name: Cassini native Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v1.13.7-cassini]
+    paths:
+      - .github/workflows/cassini-native-windows.yml
+      - scripts/build-native.sh
+      - scripts/cassini-probe/**
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vsarch: x64
+            triple: x86_64-pc-windows-gnu
+            msystem: MINGW64
+            mingw: mingw64
+            gcc: mingw-w64-x86_64-gcc
+            goarch: amd64
+            pe: pei-x86-64
+          - vsarch: Win32
+            triple: i686-pc-windows-gnu
+            msystem: MINGW32
+            mingw: mingw32
+            gcc: mingw-w64-i686-gcc
+            goarch: "386"
+            pe: pei-i386
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      OUT: C:/cn/out
+      WORK: C:/cn/w
+      MODELS: C:/cn/models
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: false
+          install: ${{ matrix.gcc }}
+
+      - name: Build sherpa-onnx-c-api.dll
+        run: |
+          CASSINI_NATIVE_BUILD_JOBS=$NUMBER_OF_PROCESSORS scripts/build-native.sh cpu "$OUT" "$WORK" -A ${{ matrix.vsarch }}
+          cat "$OUT/cassini-native-buildinfo.txt"
+          sha256sum "$OUT"/*.dll
+
+      - name: Check imports
+        run: |
+          tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
+          dll=$OUT/sherpa-onnx-c-api.dll
+          "$tools/objdump" -p "$dll" > "$OUT/objdump-p.txt"
+          "$tools/objdump" -f "$dll" | grep -q "file format ${{ matrix.pe }}"
+          imports=$(grep 'DLL Name:' "$OUT/objdump-p.txt" | awk '{print $3}' | sort | tr '\n' ' ')
+          echo "imports: $imports"
+          test "$imports" = "ADVAPI32.dll KERNEL32.dll onnxruntime.dll "
+          grep -aq '1.13.7+cassini-parakeet-v3-reference-v1.nemotron-diarization-v2.parakeet-ultra-v1' "$dll"
+          # ONNX Runtime stays upstream's; report whether the pinned archive matches it.
+          if cmp "$OUT/onnxruntime.dll" lib/${{ matrix.triple }}/onnxruntime.dll; then
+            echo "pinned ONNX Runtime is byte-identical to upstream's"
+          else
+            echo "pinned ONNX Runtime differs from upstream's; upstream's is kept"
+            sha256sum "$OUT/onnxruntime.dll" lib/${{ matrix.triple }}/onnxruntime.dll
+          fi
+
+      - name: Fetch pinned models and sample
+        run: |
+          fetch() { curl --fail --location --retry 3 -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
+          v3=https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78
+          ultra=https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8/resolve/b86784a3a5356cbd126f710b61cd90c5fe5898f1
+          mkdir -p "$MODELS/v3-int8" "$MODELS/ultra-int8"
+          fetch $v3/test_wavs/en.wav "$MODELS/en.wav" 148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6
+          fetch $v3/encoder.int8.onnx "$MODELS/v3-int8/encoder.int8.onnx" acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247
+          fetch $v3/decoder.int8.onnx "$MODELS/v3-int8/decoder.int8.onnx" 179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e
+          fetch $v3/joiner.int8.onnx "$MODELS/v3-int8/joiner.int8.onnx" 3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3
+          fetch $v3/tokens.txt "$MODELS/v3-int8/tokens.txt" d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d
+          # Original metadata: url "https://huggingface.co/moondream/parakeet-ultra (parakeet-tdt-0.6b-v3 architecture)".
+          fetch $ultra/encoder.int8.onnx "$MODELS/ultra-int8/encoder.int8.onnx" f4d06712d32431b1718eceba2153c314ac4425e8fe708a3534f5e56c5ad53697
+          fetch $ultra/decoder.int8.onnx "$MODELS/ultra-int8/decoder.int8.onnx" 94373c6405c8149d1c9d1e9862514e0e3e88dab1c7de18fac9d5df9c6ba5efdd
+          fetch $ultra/joiner.int8.onnx "$MODELS/ultra-int8/joiner.int8.onnx" 8a71aaccfdba3d451775507a889afd2257d2e754463fd81095a8c8f290f924c2
+          fetch $ultra/tokens.txt "$MODELS/ultra-int8/tokens.txt" d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d
+
+      - name: Probe through the stock Go wrapper
+        run: |
+          tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
+          cp "$OUT/sherpa-onnx-c-api.dll" lib/${{ matrix.triple }}/
+          mkdir -p "$OUT/probe"
+          cp lib/${{ matrix.triple }}/*.dll "$OUT/probe/"
+          cd scripts/cassini-probe
+          PATH="$tools:$PATH" CGO_ENABLED=1 GOARCH=${{ matrix.goarch }} CC="$tools/gcc.exe" \
+            go build -buildvcs=false -o "$OUT/probe/cassini-probe.exe" .
+          "$OUT/probe/cassini-probe.exe" "$MODELS/en.wav" "$MODELS/v3-int8" "$MODELS/ultra-int8" 2>&1 | tee "$OUT/probe.log"
+          grep -qx PASS <(tr -d '\r' < "$OUT/probe.log")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cassini-native-${{ matrix.triple }}
+          path: |
+            C:/cn/out/sherpa-onnx-c-api.dll
+            C:/cn/out/onnxruntime.dll
+            C:/cn/out/cassini-native-buildinfo.txt
+            C:/cn/out/cassini-native-inputs.sha256
+            C:/cn/out/objdump-p.txt
+            C:/cn/out/probe.log
+          if-no-files-found: error
