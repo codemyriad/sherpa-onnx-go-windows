@@ -12,6 +12,7 @@ on:
       - .github/workflows/cassini-native-windows.yml
       - scripts/build-native.sh
       - scripts/cassini-probe/**
+      - scripts/cassini-probe-c/**
 
 defaults:
   run:
@@ -104,12 +105,23 @@ jobs:
           fetch $ultra/joiner.int8.onnx "$MODELS/ultra-int8/joiner.int8.onnx" 8a71aaccfdba3d451775507a889afd2257d2e754463fd81095a8c8f290f924c2
           fetch $ultra/tokens.txt "$MODELS/ultra-int8/tokens.txt" d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d
 
-      - name: Probe through the stock Go wrapper
+      - name: Probe through the C API
         run: |
           tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
           cp "$OUT/sherpa-onnx-c-api.dll" lib/${{ matrix.triple }}/
           mkdir -p "$OUT/probe"
           cp lib/${{ matrix.triple }}/*.dll "$OUT/probe/"
+          PATH="$tools:$PATH" "$tools/gcc.exe" -O2 -Wall -I. -o "$OUT/probe/cassini-probe-c.exe" \
+            scripts/cassini-probe-c/probe.c -Llib/${{ matrix.triple }} -lsherpa-onnx-c-api
+          "$OUT/probe/cassini-probe-c.exe" "$MODELS/en.wav" "$MODELS/v3-int8" "$MODELS/ultra-int8" 2>&1 | tee "$OUT/probe-c.log"
+          grep -qx PASS <(tr -d '\r' < "$OUT/probe-c.log")
+
+      # The stock sherpa_onnx.go does not compile for windows/386 (it declares
+      # 1<<30-element arrays), so the Go probe runs on x64 only.
+      - name: Probe through the stock Go wrapper
+        if: matrix.goarch == 'amd64'
+        run: |
+          tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
           cd scripts/cassini-probe
           PATH="$tools:$PATH" CGO_ENABLED=1 GOARCH=${{ matrix.goarch }} CC="$tools/gcc.exe" \
             go build -buildvcs=false -o "$OUT/probe/cassini-probe.exe" .
@@ -126,4 +138,5 @@ jobs:
             C:/cn/out/cassini-native-inputs.sha256
             C:/cn/out/objdump-p.txt
             C:/cn/out/probe.log
-          if-no-files-found: error
+            C:/cn/out/probe-c.log
+          if-no-files-found: warn
