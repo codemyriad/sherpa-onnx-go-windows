@@ -1,0 +1,9 @@
+7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25  lib/x86_64-pc-windows-gnu/onnxruntime.dll
+26f61354baba923ba468cfd59d13ed1f5606bf8b7288ec9829daafec88be1d7a  lib/x86_64-pc-windows-gnu/sherpa-onnx-c-api.dll
+4c56327796cdb980dcbf90025c28093d89ca286088fb74c3b107f2f633e67ffe  lib/x86_64-pc-windows-gnu/sherpa-onnx-cxx-api.dll
+f97ee62a7b275bd660d5247d8921755f7bc31cccf8f6c4675d1e185fde8440f9  lib/i686-pc-windows-gnu/onnxruntime.dll
+7b720a3360fda2a91d6932089cc188abe26b9fb918b09baeb02c64ebc0710c83  lib/i686-pc-windows-gnu/sherpa-onnx-c-api.dll
+128411c83c7e224e211d2f1f7873f0785afe9b38ac8d0efc6c7353d353270199  lib/i686-pc-windows-gnu/sherpa-onnx-cxx-api.dll
+968d081836cad9af537105f59e34d4997bca2ce6d78ff39d3e47660620e8a642  lib/aarch64-pc-windows-gnu/onnxruntime.dll
+3e285cbc3627141c9f5bbe5cc736ace0e4d3691316f6e21551ad28c3e627839e  lib/aarch64-pc-windows-gnu/sherpa-onnx-c-api.dll
+5db2cf9985a4114199216e008dc7d4292d94359aaa59bd4393ffea4e5d25a89a  lib/aarch64-pc-windows-gnu/sherpa-onnx-cxx-api.dll
