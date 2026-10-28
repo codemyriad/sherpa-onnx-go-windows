@@ -12,11 +12,35 @@ consumers pair it with the unmodified `github.com/k2-fsa/sherpa-onnx-go/v2
 v2.0.1` package through a `replace` directive:
 
 ```
-replace github.com/k2-fsa/sherpa-onnx-go-windows/v2 => github.com/codemyriad/sherpa-onnx-go-windows/v2 v2.0.1-cassini.1
+replace github.com/k2-fsa/sherpa-onnx-go-windows/v2 => github.com/codemyriad/sherpa-onnx-go-windows/v2 v2.0.1-cassini.2
 ```
 
 The `v1.13.7-cassini` branch and its `v1.13.7-cassini.8` tag stay as they were
 for consumers of the 1.13.7 runtime.
+
+## v2.0.1-cassini.2
+
+v2.0.1-cassini.1 with upstream's C++ wrapper library
+(`lib/*/sherpa-onnx-cxx-api.dll`) removed. The C API library, ONNX
+Runtime, `sherpa_onnx.go` and `c-api.h` are byte-identical to v2.0.1-cassini.1.
+
+That wrapper was upstream's stock v2.0.1 build, compiled against upstream's C
+header. #4032 appends the `sortformer` member to
+`SherpaOnnxOfflineSpeakerSegmentationModelConfig`, so the stock wrapper and this
+C API disagree on the layout of the whole speaker diarization config (on 64-bit
+the struct grows from 80 to 96 bytes and the embedding config moves from offset
+32 to 48). `OfflineSpeakerDiarization::Create` through it would hand the C API
+the embedding model path as `segmentation.sortformer.model` and every later
+field at the wrong offset, which breaks ordinary Pyannote diarization as well as
+Sortformer. Nothing in Go links the C++ wrapper (`build_windows_*.go` link only
+`sherpa-onnx-c-api` and `onnxruntime`), so the module now ships only the two
+libraries it uses. C++ consumers must build `sherpa-onnx-cxx-api` from the
+source commit above.
+
+`scripts/cassini-check-module.sh` (run it from the repository root before
+tagging) fails if `lib/` holds anything but the C API library and ONNX
+Runtime per architecture, or if `CASSINI-SHA256SUMS` does not list exactly those
+files with matching checksums.
 
 ## v2.0.1-cassini.1
 
@@ -51,8 +75,9 @@ What changed in this module against upstream v2.0.1:
   (C: `SherpaOnnxOfflineSpeakerSegmentationModelConfig.sortformer`, appended to
   the struct). Pass the Nemotron model in `Segmentation.Sortformer.Model`; the
   1.13.7 fork's `Segmentation.Pyannote.Model` route does not exist here.
-- ONNX Runtime 1.28.2 (`onnxruntime.dll`) and `sherpa-onnx-cxx-api.dll` are
-  upstream v2.0.1's, unchanged. The ONNX Runtime archive pinned by the source's
+- ONNX Runtime 1.28.2 (`onnxruntime.dll`) is upstream v2.0.1's, unchanged.
+  v2.0.1-cassini.1 also kept upstream's `sherpa-onnx-cxx-api.dll`;
+  v2.0.1-cassini.2 removes it (see above). The ONNX Runtime archive pinned by the source's
   CMake files (`onnxruntime-win-{x64,x86,arm64}-MT-Release-1.28.2`) gave a DLL
   byte-identical to upstream's on all three architectures.
 
