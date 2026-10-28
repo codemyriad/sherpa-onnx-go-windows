@@ -1,0 +1,229 @@
+# Build the Cassini Windows C API DLL with MSVC (static CRT, as upstream) for
+# each architecture upstream ships (x64, Win32, ARM64), from the pinned source
+# via scripts/build-native.sh, check its imports and runtime version, then
+# probe it on a native runner of that architecture through the C API and
+# through this module's Go wrapper (MinGW/LLVM-MinGW cgo, as Go uses).
+# ONNX Runtime stays upstream's.
+name: Cassini native Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v2.0.1-cassini]
+    paths:
+      - .github/workflows/cassini-native-windows.yml
+      - scripts/build-native.sh
+      - scripts/cassini-probe/**
+      - scripts/cassini-probe-c/**
+      - sherpa_onnx.go
+      - c-api.h
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+env:
+  RUNTIME_VERSION: 2.0.1+cassini.parakeet-tdt-joiner-v1.nemotron-diarization-v2
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vsarch: x64
+            triple: x86_64-pc-windows-gnu
+            machine: "0x8664"
+          - vsarch: Win32
+            triple: i686-pc-windows-gnu
+            machine: "0x14c"
+          # Cross-compiled on x64, as upstream builds its ARM64 DLLs.
+          - vsarch: ARM64
+            triple: aarch64-pc-windows-gnu
+            machine: "0xaa64"
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      OUT: C:/cn/out
+      WORK: C:/cn/w
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sherpa-onnx-c-api.dll
+        run: |
+          CASSINI_NATIVE_BUILD_JOBS=$NUMBER_OF_PROCESSORS scripts/build-native.sh cpu "$OUT" "$WORK" -A ${{ matrix.vsarch }}
+          cat "$OUT/cassini-native-buildinfo.txt"
+          sha256sum "$OUT"/*.dll
+
+      - name: Check machine, imports and version
+        run: |
+          python -m pip install --quiet pefile==2024.8.26
+          python scripts/cassini-pe-check.py "$OUT/sherpa-onnx-c-api.dll" ${{ matrix.machine }} | tee "$OUT/imports.txt"
+          imports=$(sed -n 's/^imports: //p' "$OUT/imports.txt")
+          # Static CRT: only system DLLs upstream's DLL also imports, plus ONNX Runtime.
+          test "$imports" = "KERNEL32.dll onnxruntime.dll" || test "$imports" = "ADVAPI32.dll KERNEL32.dll onnxruntime.dll"
+          grep -aq "$RUNTIME_VERSION" "$OUT/sherpa-onnx-c-api.dll"
+          # ONNX Runtime stays upstream's; report whether the pinned archive matches it.
+          if cmp "$OUT/onnxruntime.dll" lib/${{ matrix.triple }}/onnxruntime.dll; then
+            echo "pinned ONNX Runtime is byte-identical to upstream's" | tee -a "$OUT/imports.txt"
+          else
+            echo "pinned ONNX Runtime differs from upstream's; upstream's is kept" | tee -a "$OUT/imports.txt"
+            sha256sum "$OUT/onnxruntime.dll" lib/${{ matrix.triple }}/onnxruntime.dll | tee -a "$OUT/imports.txt"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cassini-native-${{ matrix.triple }}
+          path: |
+            C:/cn/out/sherpa-onnx-c-api.dll
+            C:/cn/out/onnxruntime.dll
+            C:/cn/out/cassini-native-buildinfo.txt
+            C:/cn/out/cassini-native-inputs.sha256
+            C:/cn/out/imports.txt
+          if-no-files-found: error
+
+  probe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-pc-windows-gnu
+            runner: windows-latest
+            msystem: MINGW64
+            mingw: mingw64
+            cc: gcc
+            pkg: mingw-w64-x86_64-gcc
+            goarch: amd64
+          - triple: i686-pc-windows-gnu
+            runner: windows-latest
+            msystem: MINGW32
+            mingw: mingw32
+            cc: gcc
+            pkg: mingw-w64-i686-gcc
+            goarch: "386"
+          - triple: aarch64-pc-windows-gnu
+            runner: windows-11-arm
+            msystem: CLANGARM64
+            mingw: clangarm64
+            cc: clang
+            pkg: mingw-w64-clang-aarch64-clang
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      OUT: C:/cn/out
+      MODELS: C:/cn/models
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cassini-native-${{ matrix.triple }}
+          path: C:/cn/out
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: false
+          install: ${{ matrix.pkg }}
+
+      - name: Fetch pinned models and samples
+        run: |
+          fetch() { curl --fail --location --retry 3 -sS -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
+          # Cassini model store files are seekable Zstandard; check both digests.
+          if ! command -v zstd >/dev/null; then python -m pip install --quiet zstandard==0.23.0; fi
+          unzst() {
+            if command -v zstd >/dev/null; then zstd -d -q -f "$1" -o "$2"; else
+              python -c 'import sys, zstandard; zstandard.ZstdDecompressor().copy_stream(open(sys.argv[1], "rb"), open(sys.argv[2], "wb"))' "$1" "$2"
+            fi
+          }
+          fetchzst() {
+            fetch "$1" "$2.zst" "$3"
+            unzst "$2.zst" "$2"
+            rm "$2.zst"
+            echo "$4  $2" | sha256sum -c -
+          }
+          v3=https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78
+          dist=https://dist.gocassini.com/models/files
+          mkdir -p "$MODELS/v3-int8" "$MODELS/ultra-int8"
+          fetch $v3/test_wavs/en.wav "$MODELS/en.wav" 148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6
+          fetch https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/0-four-speakers-zh.wav \
+            "$MODELS/four.wav" bedf036caed208386c67b4ef4b11f83d74dd0d420b102163a1c33cd09cde7010
+          # Parakeet v3 int8: Cassini's production CPU bundle before Ultra (k2-fsa export).
+          fetch $v3/encoder.int8.onnx "$MODELS/v3-int8/encoder.int8.onnx" acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247
+          fetch $v3/decoder.int8.onnx "$MODELS/v3-int8/decoder.int8.onnx" 179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e
+          fetch $v3/joiner.int8.onnx "$MODELS/v3-int8/joiner.int8.onnx" 3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3
+          fetch $v3/tokens.txt "$MODELS/v3-int8/tokens.txt" d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d
+          # Parakeet Ultra int8: Cassini's production bundle parakeet-ultra-0.6b-int8
+          # (revision 18cb6230...). Its encoder metadata keeps the plain URL
+          # "https://huggingface.co/moondream/parakeet-ultra", which stock v2.0.1
+          # rejects at load (vocab_size 8193 != output_size 8198).
+          fetchzst $dist/caf7a38f2ad3224c1863564fb6e975a11aa3ae6ad1e7ad0bee5c4f5e018babb4/encoder.int8.onnx.zst "$MODELS/ultra-int8/encoder.int8.onnx" \
+            caf7a38f2ad3224c1863564fb6e975a11aa3ae6ad1e7ad0bee5c4f5e018babb4 299617fefd4664d1c115b691dcb6413cabcdbcc694cdf3cb4464b72c5fc3ae69
+          fetchzst $dist/69e2e91d01225bc552f8b0113630562fc52622cb2a3c61ef4445ee779f06b295/decoder.int8.onnx.zst "$MODELS/ultra-int8/decoder.int8.onnx" \
+            69e2e91d01225bc552f8b0113630562fc52622cb2a3c61ef4445ee779f06b295 1fab98fe6c12aded87d2da66272cc9e148d0a0044ce3850a12fe56302ec4a922
+          fetchzst $dist/639fda62a71242a8d7cefb6647f2094eb8ac783925ce91cbd047a0de6988f396/joiner.int8.onnx.zst "$MODELS/ultra-int8/joiner.int8.onnx" \
+            639fda62a71242a8d7cefb6647f2094eb8ac783925ce91cbd047a0de6988f396 8a71aaccfdba3d451775507a889afd2257d2e754463fd81095a8c8f290f924c2
+          fetchzst $dist/5b3811f0c23fefc86835981f0a23ecfb817999df272ad744c597e5b669ea1b4a/tokens.txt.zst "$MODELS/ultra-int8/tokens.txt" \
+            5b3811f0c23fefc86835981f0a23ecfb817999df272ad744c597e5b669ea1b4a d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d
+          grep -aq 'https://huggingface.co/moondream/parakeet-ultra' "$MODELS/ultra-int8/encoder.int8.onnx"
+          # Nemotron-3-Diarization int8, interface version 2 (Cassini's "Voice separation" model).
+          fetchzst $dist/794720a59892189484d38a186d2b350018b4194cae55292f501b2849d6313290/model.int8.onnx.zst "$MODELS/nemotron-3-diarization-int8.onnx" \
+            794720a59892189484d38a186d2b350018b4194cae55292f501b2849d6313290 47c221ea9b4d4e7f6c108bd098e769bc706cdc986c29f6133c93cae335fe6779
+
+      - name: Install the built DLL into the module
+        run: |
+          cp "$OUT/sherpa-onnx-c-api.dll" lib/${{ matrix.triple }}/
+          mkdir -p "$OUT/probe"
+          cp lib/${{ matrix.triple }}/*.dll "$OUT/probe/"
+          git status --short
+
+      - name: Probe through the C API
+        run: |
+          tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
+          PATH="$tools:$PATH" "$tools/${{ matrix.cc }}.exe" -O2 -Wall -I. -o "$OUT/probe/cassini-probe-c.exe" \
+            scripts/cassini-probe-c/probe.c -Llib/${{ matrix.triple }} -lsherpa-onnx-c-api
+          "$OUT/probe/cassini-probe-c.exe" "$MODELS/en.wav" \
+            --diar "$MODELS/nemotron-3-diarization-int8.onnx" "$MODELS/four.wav" scripts/cassini-probe/four-speakers-expected.txt \
+            "$MODELS/v3-int8" "$MODELS/ultra-int8" 2>&1 | tee "$OUT/probe-c.log"
+          grep -qx PASS <(tr -d '\r' < "$OUT/probe-c.log")
+
+      - name: Probe through the Go wrapper
+        run: |
+          tools="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/${{ matrix.mingw }}/bin"
+          cd scripts/cassini-probe
+          PATH="$tools:$PATH" CGO_ENABLED=1 GOARCH=${{ matrix.goarch }} CC="$tools/${{ matrix.cc }}.exe" \
+            go build -buildvcs=false -o "$OUT/probe/cassini-probe.exe" .
+          "$OUT/probe/cassini-probe.exe" -wav "$MODELS/en.wav" \
+            -diar-model "$MODELS/nemotron-3-diarization-int8.onnx" -diar-wav "$MODELS/four.wav" -diar-expect four-speakers-expected.txt \
+            "$MODELS/v3-int8" "$MODELS/ultra-int8" 2>&1 | tee "$OUT/probe.log"
+          grep -qx PASS <(tr -d '\r' < "$OUT/probe.log")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cassini-probe-${{ matrix.triple }}
+          path: |
+            C:/cn/out/probe.log
+            C:/cn/out/probe-c.log
+          if-no-files-found: warn
