@@ -12,11 +12,37 @@ consumers pair it with the unmodified `github.com/k2-fsa/sherpa-onnx-go/v2
 v2.0.1` package through a `replace` directive:
 
 ```
-replace github.com/k2-fsa/sherpa-onnx-go-windows/v2 => github.com/codemyriad/sherpa-onnx-go-windows/v2 v2.0.1-cassini.2
+replace github.com/k2-fsa/sherpa-onnx-go-windows/v2 => github.com/codemyriad/sherpa-onnx-go-windows/v2 v2.0.1-cassini.3
 ```
 
 The `v1.13.7-cassini` branch and its `v1.13.7-cassini.8` tag stay as they were
 for consumers of the 1.13.7 runtime.
+
+## v2.0.1-cassini.3
+
+`sherpa-onnx-c-api.dll` for x64, Win32 and ARM64 rebuilt from
+[`deede1786479e265a3116bea2b71aac47113d9fc`](https://github.com/codemyriad/sherpa-onnx/commit/deede1786479e265a3116bea2b71aac47113d9fc)
+(codemyriad/sherpa-onnx tag `v2.0.1-cassini-2`, codeload tarball sha256
+`44727282e5b206f71a783b2d7d113c973203f81bc65685f56d8c2d446b1b3c62`). It
+carries the same three Cassini patches as `v2.0.1-cassini-1`, rebased from
+the v2.0.1 release onto upstream master `935e5ded`, which is v2.0.1 plus 16
+commits, among them #4084 and #4130 (NeMo TDT `modified_beam_search`) and
+#4123 (`--length-reward` parsing). Its fourth patch, a `cudaGetDeviceProperties`
+cache, is built only into Linux x86_64 CUDA libraries, not into these. The
+runtime version string, `sherpa_onnx.go`, `c-api.h` and ONNX Runtime are
+unchanged; `lib/` still holds only the C API and ONNX Runtime
+(`scripts/cassini-check-module.sh` passes).
+
+The DLLs are the artifacts of
+[run 41049063017](https://github.com/codemyriad/sherpa-onnx-go-windows/actions/runs/41049063017)
+(commit `ef22bc1`, every build and probe job green). On native runners of each
+architecture, through the C API and through the Go wrapper: `en.wav` at gain 1
+and 0.001 gives 27 tokens and the full sentence with Parakeet v3 int8 and the
+plain-URL Parakeet Ultra int8 bundle; Nemotron-3-Diarization int8 through
+`Segmentation.Sortformer` gives 9 turns and 4 speakers, within 0.03 s (x64) and
+0.02 s (Win32, ARM64) of `scripts/cassini-probe/four-speakers-expected.txt`,
+as in `.1`. The pinned ONNX Runtime archive is byte-identical to the shipped
+`onnxruntime.dll` on all three.
 
 ## v2.0.1-cassini.2
 
