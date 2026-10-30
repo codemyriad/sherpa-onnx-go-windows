@@ -1,5 +1,5 @@
 // Command cassini-probe checks a Cassini native build through this module's Go
-// wrapper (the sherpa-onnx v2.0.1-cassini-1 sherpa_onnx.go):
+// wrapper (the sherpa-onnx v2.0.1-cassini-2 sherpa_onnx.go, unchanged since -1):
 //
 //   - the runtime version must be the Cassini v2.0.1 string, with every marker;
 //   - each Parakeet model directory must transcribe the public English sample

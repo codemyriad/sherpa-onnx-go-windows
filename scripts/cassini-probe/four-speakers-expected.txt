@@ -4,7 +4,8 @@
 # nemotron-3-diarization-int8 (dist.gocassini.com, sha256 47c221ea...),
 # Segmentation.Sortformer, threshold 0.5, MinDurationOn 0.3, MinDurationOff 0.5.
 # Reference: codemyriad/sherpa-onnx v2.0.1-cassini-1 (c810dfcf) built for Linux
-# x86_64 (GCC 14.2) through this Go wrapper.
+# x86_64 (GCC 14.2) through this Go wrapper; v2.0.1-cassini-2 (deede178) gives
+# the same turns.
 # start end speaker
 0.600 6.810 0
 7.030 10.830 1
